@@ -1057,6 +1057,7 @@ pub const Object = struct {
         sanitize_thread: bool,
         fuzz: bool,
         lto: bool,
+        lto_mode: Compilation.Config.LTOMode,
     };
 
     pub fn emit(o: *Object, options: EmitOptions) !void {

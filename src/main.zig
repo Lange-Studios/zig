@@ -1380,8 +1380,20 @@ fn buildOutputType(
                         create_module.opts.pie = true;
                     } else if (mem.eql(u8, arg, "-fno-PIE")) {
                         create_module.opts.pie = false;
-                    } else if (mem.eql(u8, arg, "-flto")) {
+                    } else if (mem.startsWith(u8, arg, "-flto")) {
                         create_module.opts.lto = true;
+                        if (mem.startsWith(u8, arg, "-flto=")) {
+                            const mode = arg["-flto=".len..];
+                            if (mem.eql(u8, mode, "auto")) {
+                                create_module.opts.lto_mode = .auto;
+                            } else if (mem.eql(u8, mode, "full")) {
+                                create_module.opts.lto_mode = .full;
+                            } else if (mem.eql(u8, mode, "thin")) {
+                                create_module.opts.lto_mode = .thin;
+                            } else {
+                                fatal("Invalid -flto mode: '{s}'. Must be 'full', 'thin', or 'auto'.", .{mode});
+                            }
+                        }
                     } else if (mem.eql(u8, arg, "-fno-lto")) {
                         create_module.opts.lto = false;
                     } else if (mem.eql(u8, arg, "-funwind-tables")) {
@@ -1951,7 +1963,20 @@ fn buildOutputType(
                     .no_pic => mod_opts.pic = false,
                     .pie => create_module.opts.pie = true,
                     .no_pie => create_module.opts.pie = false,
-                    .lto => create_module.opts.lto = true,
+                    .lto => {
+                        create_module.opts.lto = true;
+                        if (mem.eql(u8, it.only_arg, "flto")) {
+                            create_module.opts.lto_mode = .default;
+                        } else if (mem.eql(u8, it.only_arg, "auto")) {
+                            create_module.opts.lto_mode = .auto;
+                        } else if (mem.eql(u8, it.only_arg, "full")) {
+                            create_module.opts.lto_mode = .full;
+                        } else if (mem.eql(u8, it.only_arg, "thin")) {
+                            create_module.opts.lto_mode = .thin;
+                        } else {
+                            fatal("Invalid -flto mode: '{s}'. Must be 'auto', 'full', or 'thin'.", .{it.only_arg});
+                        }
+                    },
                     .no_lto => create_module.opts.lto = false,
                     .red_zone => mod_opts.red_zone = true,
                     .no_red_zone => mod_opts.red_zone = false,
