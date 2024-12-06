@@ -166,6 +166,7 @@ pub fn buildLibCXX(comp: *Compilation, prog_node: std.Progress.Node) BuildError!
         .root_strip = strip,
         .link_libc = true,
         .lto = comp.config.lto,
+        .lto_mode = comp.config.lto_mode,
         .any_sanitize_thread = comp.config.any_sanitize_thread,
     }) catch |err| {
         comp.setMiscFailure(
@@ -411,6 +412,7 @@ pub fn buildLibCXXABI(comp: *Compilation, prog_node: std.Progress.Node) BuildErr
         .link_libc = true,
         .any_unwind_tables = unwind_tables,
         .lto = comp.config.lto,
+        .lto_mode = comp.config.lto_mode,
         .any_sanitize_thread = comp.config.any_sanitize_thread,
     }) catch |err| {
         comp.setMiscFailure(
