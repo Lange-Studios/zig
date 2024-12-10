@@ -5344,8 +5344,13 @@ pub fn addCCArgs(
                 "-nostdinc",
                 "-fno-spell-checking",
             });
-            if (comp.config.lto) {
-                try argv.append("-flto");
+            switch (comp.config.lto) {
+                .none => {},
+                .flto => try argv.append("-flto"),
+                .auto => try argv.append("-flto=auto"),
+                .full => try argv.append("-flto=full"),
+                .thin => try argv.append("-flto=thin"),
+                .jobserver => try argv.append("-flto=jobserver"),
             }
 
             if (ext == .mm) {
@@ -6313,7 +6318,7 @@ pub fn build_crt_file(
         .link_libc = false,
         .lto = switch (output_mode) {
             .Lib => comp.config.lto,
-            .Obj, .Exe => false,
+            .Obj, .Exe => .none,
         },
     });
     const root_mod = try Package.Module.create(arena, .{

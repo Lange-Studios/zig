@@ -47,7 +47,7 @@ use_lib_llvm: bool,
 /// and updates the final binary.
 use_lld: bool,
 c_frontend: CFrontend,
-lto: bool,
+lto: LtoMode,
 /// WASI-only. Type of WASI execution model ("command" or "reactor").
 /// Always set to `command` for non-WASI targets.
 wasi_exec_model: std.builtin.WasiExecModel,
@@ -63,6 +63,8 @@ rdynamic: bool,
 san_cov_trace_pc_guard: bool,
 
 pub const CFrontend = enum { clang, aro };
+
+pub const LtoMode = enum { none, flto, auto, full, thin, jobserver };
 
 pub const DebugFormat = union(enum) {
     strip,
@@ -100,7 +102,7 @@ pub const Options = struct {
     use_lib_llvm: ?bool = null,
     use_lld: ?bool = null,
     use_clang: ?bool = null,
-    lto: ?bool = null,
+    lto: LtoMode = .none,
     /// WASI-only. Type of WASI execution model ("command" or "reactor").
     wasi_exec_model: ?std.builtin.WasiExecModel = null,
     import_memory: ?bool = null,
@@ -257,7 +259,7 @@ pub fn resolve(options: Options) ResolveError!Config {
             break :b false;
         }
 
-        if (options.lto == true) {
+        if (options.lto != .none) {
             if (options.use_lld == false) return error.LtoRequiresLld;
             break :b true;
         }
@@ -287,12 +289,12 @@ pub fn resolve(options: Options) ResolveError!Config {
         if (!use_lld) {
             // zig ld LTO support is tracked by
             // https://github.com/ziglang/zig/issues/8680
-            if (options.lto == true) return error.LtoRequiresLld;
-            break :b false;
+            if (options.lto != .none) return error.LtoRequiresLld;
+            break :b .none;
         }
 
-        if (options.lto) |x| break :b x;
-        if (!options.any_c_source_files) break :b false;
+        if (options.lto != .none) break :b options.lto;
+        if (!options.any_c_source_files) break :b .none;
 
         // https://github.com/llvm/llvm-project/pull/116537
         switch (target.abi) {
@@ -302,15 +304,15 @@ pub fn resolve(options: Options) ResolveError!Config {
             .ilp32,
             .muslabin32,
             .muslx32,
-            => break :b false,
+            => break :b .none,
             else => {},
         }
 
         break :b switch (options.output_mode) {
-            .Lib, .Obj => false,
+            .Lib, .Obj => .none,
             .Exe => switch (root_optimize_mode) {
-                .Debug => false,
-                .ReleaseSafe, .ReleaseFast, .ReleaseSmall => true,
+                .Debug => .none,
+                .ReleaseSafe, .ReleaseFast, .ReleaseSmall => options.lto,
             },
         };
     };
