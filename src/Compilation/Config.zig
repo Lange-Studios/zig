@@ -48,7 +48,6 @@ use_lib_llvm: bool,
 use_lld: bool,
 c_frontend: CFrontend,
 lto: bool,
-lto_mode: LTOMode,
 /// WASI-only. Type of WASI execution model ("command" or "reactor").
 /// Always set to `command` for non-WASI targets.
 wasi_exec_model: std.builtin.WasiExecModel,
@@ -64,8 +63,6 @@ rdynamic: bool,
 san_cov_trace_pc_guard: bool,
 
 pub const CFrontend = enum { clang, aro };
-
-pub const LTOMode = enum { default, auto, full, thin };
 
 pub const DebugFormat = union(enum) {
     strip,
@@ -104,7 +101,6 @@ pub const Options = struct {
     use_lld: ?bool = null,
     use_clang: ?bool = null,
     lto: ?bool = null,
-    lto_mode: LTOMode = LTOMode.default,
     /// WASI-only. Type of WASI execution model ("command" or "reactor").
     wasi_exec_model: ?std.builtin.WasiExecModel = null,
     import_memory: ?bool = null,
@@ -319,8 +315,6 @@ pub fn resolve(options: Options) ResolveError!Config {
         };
     };
 
-    const lto_mode = options.lto_mode;
-
     const link_libcpp = b: {
         if (options.link_libcpp == true) break :b true;
         if (options.any_sanitize_thread) {
@@ -506,7 +500,6 @@ pub fn resolve(options: Options) ResolveError!Config {
         .root_error_tracing = root_error_tracing,
         .pie = pie,
         .lto = lto,
-        .lto_mode = lto_mode,
         .import_memory = import_memory,
         .export_memory = export_memory,
         .shared_memory = shared_memory,

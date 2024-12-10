@@ -1353,7 +1353,6 @@ pub fn create(gpa: Allocator, arena: Allocator, options: CreateOptions) !*Compil
         cache.hash.add(builtin.zig_backend);
         cache.hash.add(options.config.pie);
         cache.hash.add(options.config.lto);
-        cache.hash.add(options.config.lto_mode);
         cache.hash.add(options.config.link_mode);
         cache.hash.add(options.function_sections);
         cache.hash.add(options.data_sections);
@@ -2721,7 +2720,6 @@ pub fn emitLlvmObject(
         .sanitize_thread = comp.config.any_sanitize_thread,
         .fuzz = comp.config.any_fuzz,
         .lto = comp.config.lto,
-        .lto_mode = comp.config.lto_mode,
     });
 }
 
@@ -5347,12 +5345,7 @@ pub fn addCCArgs(
                 "-fno-spell-checking",
             });
             if (comp.config.lto) {
-                switch (comp.config.lto_mode) {
-                    .default => try argv.append("-flto"),
-                    .auto => try argv.append("-flto=auto"),
-                    .full => try argv.append("-flto=full"),
-                    .thin => try argv.append("-flto=thin"),
-                }
+                try argv.append("-flto");
             }
 
             if (ext == .mm) {
@@ -6323,7 +6316,6 @@ pub fn build_crt_file(
             .Lib => comp.config.lto,
             .Obj, .Exe => false,
         },
-        .lto_mode = comp.config.lto_mode,
     });
     const root_mod = try Package.Module.create(arena, .{
         .global_cache_directory = comp.global_cache_directory,
