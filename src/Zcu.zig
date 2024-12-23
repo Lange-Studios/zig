@@ -836,20 +836,38 @@ pub const SrcLoc = struct {
             .node_offset_var_decl_align => |node_off| {
                 const tree = try src_loc.file_scope.getTree(gpa);
                 const node = src_loc.relativeToNodeIndex(node_off);
-                const full = tree.fullVarDecl(node).?;
-                return tree.nodeToSpan(full.ast.align_node);
+                var buf: [1]Ast.Node.Index = undefined;
+                const align_node = if (tree.fullVarDecl(node)) |v|
+                    v.ast.align_node
+                else if (tree.fullFnProto(&buf, node)) |f|
+                    f.ast.align_expr
+                else
+                    unreachable;
+                return tree.nodeToSpan(align_node);
             },
             .node_offset_var_decl_section => |node_off| {
                 const tree = try src_loc.file_scope.getTree(gpa);
                 const node = src_loc.relativeToNodeIndex(node_off);
-                const full = tree.fullVarDecl(node).?;
-                return tree.nodeToSpan(full.ast.section_node);
+                var buf: [1]Ast.Node.Index = undefined;
+                const section_node = if (tree.fullVarDecl(node)) |v|
+                    v.ast.section_node
+                else if (tree.fullFnProto(&buf, node)) |f|
+                    f.ast.section_expr
+                else
+                    unreachable;
+                return tree.nodeToSpan(section_node);
             },
             .node_offset_var_decl_addrspace => |node_off| {
                 const tree = try src_loc.file_scope.getTree(gpa);
                 const node = src_loc.relativeToNodeIndex(node_off);
-                const full = tree.fullVarDecl(node).?;
-                return tree.nodeToSpan(full.ast.addrspace_node);
+                var buf: [1]Ast.Node.Index = undefined;
+                const addrspace_node = if (tree.fullVarDecl(node)) |v|
+                    v.ast.addrspace_node
+                else if (tree.fullFnProto(&buf, node)) |f|
+                    f.ast.addrspace_expr
+                else
+                    unreachable;
+                return tree.nodeToSpan(addrspace_node);
             },
             .node_offset_var_decl_init => |node_off| {
                 const tree = try src_loc.file_scope.getTree(gpa);
@@ -2593,25 +2611,43 @@ pub fn mapOldZirToNew(
     defer match_stack.deinit(gpa);
 
     // Used as temporary buffers for namespace declaration instructions
-    var old_decls: std.ArrayListUnmanaged(Zir.Inst.Index) = .empty;
-    defer old_decls.deinit(gpa);
-    var new_decls: std.ArrayListUnmanaged(Zir.Inst.Index) = .empty;
-    defer new_decls.deinit(gpa);
+    var old_contents: Zir.DeclContents = .init;
+    defer old_contents.deinit(gpa);
+    var new_contents: Zir.DeclContents = .init;
+    defer new_contents.deinit(gpa);
 
     // Map the main struct inst (and anything in its fields)
     {
-        try old_zir.findDeclsRoot(gpa, &old_decls);
-        try new_zir.findDeclsRoot(gpa, &new_decls);
+        try old_zir.findTrackableRoot(gpa, &old_contents);
+        try new_zir.findTrackableRoot(gpa, &new_contents);
 
-        assert(old_decls.items[0] == .main_struct_inst);
-        assert(new_decls.items[0] == .main_struct_inst);
+        assert(old_contents.explicit_types.items[0] == .main_struct_inst);
+        assert(new_contents.explicit_types.items[0] == .main_struct_inst);
 
-        // We don't have any smart way of matching up these type declarations, so we always
-        // correlate them based on source order.
-        const n = @min(old_decls.items.len, new_decls.items.len);
-        try match_stack.ensureUnusedCapacity(gpa, n);
-        for (old_decls.items[0..n], new_decls.items[0..n]) |old_inst, new_inst| {
+        assert(old_contents.func_decl == null);
+        assert(new_contents.func_decl == null);
+
+        // We don't have any smart way of matching up these instructions, so we correlate them based on source order
+        // in their respective arrays.
+
+        const num_explicit_types = @min(old_contents.explicit_types.items.len, new_contents.explicit_types.items.len);
+        try match_stack.ensureUnusedCapacity(gpa, @intCast(num_explicit_types));
+        for (
+            old_contents.explicit_types.items[0..num_explicit_types],
+            new_contents.explicit_types.items[0..num_explicit_types],
+        ) |old_inst, new_inst| {
+            // Here we use `match_stack`, so that we will recursively consider declarations on these types.
             match_stack.appendAssumeCapacity(.{ .old_inst = old_inst, .new_inst = new_inst });
+        }
+
+        const num_other = @min(old_contents.other.items.len, new_contents.other.items.len);
+        try inst_map.ensureUnusedCapacity(gpa, @intCast(num_other));
+        for (
+            old_contents.other.items[0..num_other],
+            new_contents.other.items[0..num_other],
+        ) |old_inst, new_inst| {
+            // These instructions don't have declarations, so we just modify `inst_map` directly.
+            inst_map.putAssumeCapacity(old_inst, new_inst);
         }
     }
 
@@ -2625,6 +2661,9 @@ pub fn mapOldZirToNew(
         // Maps test name to `declaration` instruction.
         var named_tests: std.StringHashMapUnmanaged(Zir.Inst.Index) = .empty;
         defer named_tests.deinit(gpa);
+        // Maps test name to `declaration` instruction.
+        var named_decltests: std.StringHashMapUnmanaged(Zir.Inst.Index) = .empty;
+        defer named_decltests.deinit(gpa);
         // All unnamed tests, in order, for a best-effort match.
         var unnamed_tests: std.ArrayListUnmanaged(Zir.Inst.Index) = .empty;
         defer unnamed_tests.deinit(gpa);
@@ -2642,12 +2681,16 @@ pub fn mapOldZirToNew(
                 switch (old_decl.name) {
                     .@"comptime" => try comptime_decls.append(gpa, old_decl_inst),
                     .@"usingnamespace" => try usingnamespace_decls.append(gpa, old_decl_inst),
-                    .unnamed_test, .decltest => try unnamed_tests.append(gpa, old_decl_inst),
+                    .unnamed_test => try unnamed_tests.append(gpa, old_decl_inst),
                     _ => {
                         const name_nts = old_decl.name.toString(old_zir).?;
                         const name = old_zir.nullTerminatedString(name_nts);
                         if (old_decl.name.isNamedTest(old_zir)) {
-                            try named_tests.put(gpa, name, old_decl_inst);
+                            if (old_decl.flags.test_is_decltest) {
+                                try named_decltests.put(gpa, name, old_decl_inst);
+                            } else {
+                                try named_tests.put(gpa, name, old_decl_inst);
+                            }
                         } else {
                             try named_decls.put(gpa, name, old_decl_inst);
                         }
@@ -2665,8 +2708,8 @@ pub fn mapOldZirToNew(
             const new_decl, _ = new_zir.getDeclaration(new_decl_inst);
             // Attempt to match this to a declaration in the old ZIR:
             // * For named declarations (`const`/`var`/`fn`), we match based on name.
-            // * For named tests (`test "foo"`), we also match based on name.
-            // * For unnamed tests and decltests, we match based on order.
+            // * For named tests (`test "foo"`) and decltests (`test foo`), we also match based on name.
+            // * For unnamed tests, we match based on order.
             // * For comptime blocks, we match based on order.
             // * For usingnamespace decls, we match based on order.
             // If we cannot match this declaration, we can't match anything nested inside of it either, so we just `continue`.
@@ -2681,7 +2724,7 @@ pub fn mapOldZirToNew(
                     defer usingnamespace_decl_idx += 1;
                     break :inst usingnamespace_decls.items[usingnamespace_decl_idx];
                 },
-                .unnamed_test, .decltest => inst: {
+                .unnamed_test => inst: {
                     if (unnamed_test_idx == unnamed_tests.items.len) continue;
                     defer unnamed_test_idx += 1;
                     break :inst unnamed_tests.items[unnamed_test_idx];
@@ -2690,7 +2733,11 @@ pub fn mapOldZirToNew(
                     const name_nts = new_decl.name.toString(new_zir).?;
                     const name = new_zir.nullTerminatedString(name_nts);
                     if (new_decl.name.isNamedTest(new_zir)) {
-                        break :inst named_tests.get(name) orelse continue;
+                        if (new_decl.flags.test_is_decltest) {
+                            break :inst named_decltests.get(name) orelse continue;
+                        } else {
+                            break :inst named_tests.get(name) orelse continue;
+                        }
                     } else {
                         break :inst named_decls.get(name) orelse continue;
                     }
@@ -2700,16 +2747,38 @@ pub fn mapOldZirToNew(
             // Match the `declaration` instruction
             try inst_map.put(gpa, old_decl_inst, new_decl_inst);
 
-            // Find container type declarations within this declaration
-            try old_zir.findDecls(gpa, &old_decls, old_decl_inst);
-            try new_zir.findDecls(gpa, &new_decls, new_decl_inst);
+            // Find trackable instructions within this declaration
+            try old_zir.findTrackable(gpa, &old_contents, old_decl_inst);
+            try new_zir.findTrackable(gpa, &new_contents, new_decl_inst);
 
-            // We don't have any smart way of matching up these type declarations, so we always
-            // correlate them based on source order.
-            const n = @min(old_decls.items.len, new_decls.items.len);
-            try match_stack.ensureUnusedCapacity(gpa, n);
-            for (old_decls.items[0..n], new_decls.items[0..n]) |old_inst, new_inst| {
+            // We don't have any smart way of matching up these instructions, so we correlate them based on source order
+            // in their respective arrays.
+
+            const num_explicit_types = @min(old_contents.explicit_types.items.len, new_contents.explicit_types.items.len);
+            try match_stack.ensureUnusedCapacity(gpa, @intCast(num_explicit_types));
+            for (
+                old_contents.explicit_types.items[0..num_explicit_types],
+                new_contents.explicit_types.items[0..num_explicit_types],
+            ) |old_inst, new_inst| {
+                // Here we use `match_stack`, so that we will recursively consider declarations on these types.
                 match_stack.appendAssumeCapacity(.{ .old_inst = old_inst, .new_inst = new_inst });
+            }
+
+            const num_other = @min(old_contents.other.items.len, new_contents.other.items.len);
+            try inst_map.ensureUnusedCapacity(gpa, @intCast(num_other));
+            for (
+                old_contents.other.items[0..num_other],
+                new_contents.other.items[0..num_other],
+            ) |old_inst, new_inst| {
+                // These instructions don't have declarations, so we just modify `inst_map` directly.
+                inst_map.putAssumeCapacity(old_inst, new_inst);
+            }
+
+            if (old_contents.func_decl) |old_func_inst| {
+                if (new_contents.func_decl) |new_func_inst| {
+                    // There are no declarations on a function either, so again, we just directly add it to `inst_map`.
+                    try inst_map.put(gpa, old_func_inst, new_func_inst);
+                }
             }
         }
     }
@@ -3289,7 +3358,7 @@ fn resolveReferencesInner(zcu: *Zcu) !std.AutoHashMapUnmanaged(AnalUnit, ?Resolv
                     else => a: {
                         if (!comp.config.is_test) break :a false;
                         if (file.mod != zcu.main_mod) break :a false;
-                        if (declaration.name.isNamedTest(zir) or declaration.name == .decltest) {
+                        if (declaration.name.isNamedTest(zir)) {
                             const nav = ip.getCau(cau).owner.unwrap().nav;
                             const fqn_slice = ip.getNav(nav).fqn.toSlice(ip);
                             for (comp.test_filters) |test_filter| {
